@@ -2,10 +2,11 @@ import Foundation
 import Testing
 @testable import agtermCore
 
-/// Closing the ACTIVE session returns to the most-recently-active SURVIVING session, scoped to the
-/// closing session's workspace ∩ the VISIBLE set — the flagged list in `.flagged` mode, the marked
-/// workspaces' sessions while the focus filter applies — widening through everything visible and then
-/// the whole tree, with a positional walk as the last fallback (GitHub Discussion #147).
+/// Closing the ACTIVE session returns to the most-recently-active SURVIVING session, with recency asked
+/// per level, narrowest first: the closing session's workspace ∩ the VISIBLE set — the flagged list in
+/// `.flagged` mode, the marked workspaces' sessions while the focus filter applies — then that visible
+/// set, then the whole tree only while nothing is visible. A positional walk runs when no level
+/// remembers anyone (GitHub Discussion #147).
 @MainActor
 struct AppStoreCloseReselectionTests {
     @Test func closeActiveSessionInsertedAfterCurrentReturnsToTheSessionItCameFrom() throws {
@@ -277,6 +278,147 @@ struct AppStoreCloseReselectionTests {
         store.closeSession(closing.id)
         #expect(store.flaggedSessions.isEmpty)
         #expect(store.selectedSessionID == recentSurvivor.id)
+    }
+
+    // the workspace holds a survivor, but one that was never selected - `session new --no-select` leaves
+    // every tab it opens in that state until the first visit, so a script-filled workspace is normally in
+    // it. With no remembered local destination, a session visited elsewhere in the navigation set beats a
+    // neighbour the user has never opened.
+    @Test func closeWithNoRecencyInTheWorkspaceReturnsToTheVisitedSessionElsewhere() throws {
+        let store = makeStore()
+        let wsClosing = UUID(), wsOther = UUID()
+        let closing = UUID(), never = UUID(), visited = UUID()
+        store.restore(from: Snapshot(selectedSessionID: visited, workspaces: [
+            WorkspaceSnapshot(id: wsClosing, name: "work", sessions: [
+                SessionSnapshot(id: closing, customName: nil, cwd: "/closing"),
+                SessionSnapshot(id: never, customName: nil, cwd: "/never"),
+            ]),
+            WorkspaceSnapshot(id: wsOther, name: "other", sessions: [
+                SessionSnapshot(id: visited, customName: nil, cwd: "/visited"),
+            ]),
+        ]))
+        store.selectSession(closing)
+        #expect(store.sessionRecency.items == [closing, visited])
+
+        store.closeSession(closing)
+        #expect(store.selectedSessionID == visited)
+    }
+
+    // the visible level is the one the filters change: with TWO marked workspaces it spans both, so the
+    // pick crosses while the filter survives. Without this the rule can be re-tightened to "locality only
+    // while a filter applies" and the rest of the suite stays green.
+    @Test func closeUnderAFocusFilterCrossesToARememberedSessionInAnotherMarkedWorkspace() throws {
+        let store = makeStore()
+        let wsClosing = UUID(), wsOther = UUID()
+        let closing = UUID(), never = UUID(), visited = UUID()
+        store.restore(from: Snapshot(selectedSessionID: visited, workspaces: [
+            WorkspaceSnapshot(id: wsClosing, name: "work", sessions: [
+                SessionSnapshot(id: closing, customName: nil, cwd: "/closing"),
+                SessionSnapshot(id: never, customName: nil, cwd: "/never"),
+            ]),
+            WorkspaceSnapshot(id: wsOther, name: "other", sessions: [
+                SessionSnapshot(id: visited, customName: nil, cwd: "/visited"),
+            ]),
+        ], focusedWorkspaceIDs: [wsClosing, wsOther], focusEnabled: true))
+        store.selectSession(closing)
+        #expect(store.sessionRecency.items == [closing, visited])
+
+        store.closeSession(closing)
+        #expect(store.selectedSessionID == visited)
+        #expect(store.focusEnabled && store.focusedWorkspaceIDs == [wsClosing, wsOther])
+    }
+
+    // the flagged twin: the flagged list is itself cross-workspace, so the visible level crosses inside it
+    // and the pick stays inside the navigation set.
+    @Test func closeInFlaggedModeCrossesToARememberedFlaggedSessionInAnotherWorkspace() throws {
+        let store = makeStore()
+        let wsClosing = UUID(), wsOther = UUID()
+        let closing = UUID(), never = UUID(), visited = UUID()
+        store.restore(from: Snapshot(selectedSessionID: visited, workspaces: [
+            WorkspaceSnapshot(id: wsClosing, name: "work", sessions: [
+                SessionSnapshot(id: closing, customName: nil, cwd: "/closing", flagged: true),
+                SessionSnapshot(id: never, customName: nil, cwd: "/never", flagged: true),
+            ]),
+            WorkspaceSnapshot(id: wsOther, name: "other", sessions: [
+                SessionSnapshot(id: visited, customName: nil, cwd: "/visited", flagged: true),
+            ]),
+        ], sidebarMode: .flagged))
+        store.selectSession(closing)
+        #expect(store.sessionRecency.items == [closing, visited])
+
+        store.closeSession(closing)
+        #expect(store.selectedSessionID == visited)
+        #expect(store.flaggedSessions.map(\.id).contains(try #require(store.selectedSessionID)))
+    }
+
+    // the soft paths keep the closing session in recency for undo, so only the tree-derived sets keep it
+    // out of the new visible level - and the soft path is what the GUI takes by default.
+    @Test func softCloseWithNoRecencyInTheWorkspaceCrossesWithoutPickingTheClosingSession() throws {
+        let store = makeStore()
+        let wsClosing = UUID(), wsOther = UUID()
+        let closing = UUID(), never = UUID(), visited = UUID()
+        store.restore(from: Snapshot(selectedSessionID: visited, workspaces: [
+            WorkspaceSnapshot(id: wsClosing, name: "work", sessions: [
+                SessionSnapshot(id: closing, customName: nil, cwd: "/closing"),
+                SessionSnapshot(id: never, customName: nil, cwd: "/never"),
+            ]),
+            WorkspaceSnapshot(id: wsOther, name: "other", sessions: [
+                SessionSnapshot(id: visited, customName: nil, cwd: "/visited"),
+            ]),
+        ]))
+        store.selectSession(closing)
+
+        #expect(store.softCloseSession(closing, grace: 60))
+        #expect(store.sessionRecency.items.contains(closing), "undo needs the closing session in recency")
+        #expect(store.selectedSessionID == visited)
+    }
+
+    // the widening stops at the VISIBLE set: a visited session outside the focus filter must not win, or
+    // the pick silently drops the user's focus filter on close - the safety net reveals it by switching
+    // the filter off, which is the hazard here rather than an unreachable row.
+    @Test func closeUnderAFocusFilterPrefersTheInScopePickOverAVisitedSessionOutsideIt() throws {
+        let store = makeStore()
+        let wsClosing = UUID(), wsOther = UUID()
+        let closing = UUID(), never = UUID(), visited = UUID()
+        store.restore(from: Snapshot(selectedSessionID: visited, workspaces: [
+            WorkspaceSnapshot(id: wsClosing, name: "work", sessions: [
+                SessionSnapshot(id: closing, customName: nil, cwd: "/closing"),
+                SessionSnapshot(id: never, customName: nil, cwd: "/never"),
+            ]),
+            WorkspaceSnapshot(id: wsOther, name: "other", sessions: [
+                SessionSnapshot(id: visited, customName: nil, cwd: "/visited"),
+            ]),
+        ], focusedWorkspaceIDs: [wsClosing], focusEnabled: true))
+        // `restore` selects `closing` itself: `visited` is outside the filter, so its closing
+        // `reselectIfSelectionHidden` moves off it - which is also what leaves `visited` in recency.
+        #expect(store.sessionRecency.items == [closing, visited])
+
+        store.closeSession(closing)
+        #expect(store.selectedSessionID == never)
+        #expect(store.focusEnabled && store.focusedWorkspaceIDs == [wsClosing])
+    }
+
+    // same stop in flagged mode, where it matters more: `disableFocusIfSelectionOutsideSet` returns early
+    // there, so a pick outside the flagged list would sit outside the navigation set with nothing to
+    // bring it back.
+    @Test func closeInFlaggedModePrefersTheInScopePickOverAVisitedSessionOutsideTheList() throws {
+        let store = makeStore()
+        let wsClosing = UUID(), wsOther = UUID()
+        let closing = UUID(), never = UUID(), visited = UUID()
+        store.restore(from: Snapshot(selectedSessionID: visited, workspaces: [
+            WorkspaceSnapshot(id: wsClosing, name: "work", sessions: [
+                SessionSnapshot(id: closing, customName: nil, cwd: "/closing", flagged: true),
+                SessionSnapshot(id: never, customName: nil, cwd: "/never", flagged: true),
+            ]),
+            WorkspaceSnapshot(id: wsOther, name: "other", sessions: [
+                SessionSnapshot(id: visited, customName: nil, cwd: "/visited"),
+            ]),
+        ], sidebarMode: .flagged))
+        #expect(store.sessionRecency.items == [closing, visited])
+
+        store.closeSession(closing)
+        #expect(store.selectedSessionID == never)
+        #expect(store.flaggedSessions.map(\.id).contains(try #require(store.selectedSessionID)))
     }
 
     @Test func closeActiveSessionWithAnEmptyScopedRecencyFallsBackToThePositionalTarget() throws {

@@ -315,7 +315,10 @@ omitted when expanded).
   off its primary pane, where `tree.cwd` reports the primary, or a remote session, where it can read as
   home).
 - `session close [--target T ...]` — close one session, or repeat `--target` to close a batch with one
-  grace-period undo.
+  grace-period undo. Closing the SELECTED session moves the selection to the most recently used survivor,
+  which can be in another workspace when the closing one holds nothing the user has visited and that
+  survivor is in the same navigable set; that also moves what workspace-scoped `--target active` resolves
+  to, so read `tree` back before relying on it.
 - `session select` · `session rename <name>` · `session reveal` (select the focused pane's cwd in Finder).
 - `session go --to next|prev|first|last|next-attention|prev-attention` — move the selection between sessions.
 - `session move <workspace>` (relocate) or `session move --to up|down|top|bottom` (reorder within the

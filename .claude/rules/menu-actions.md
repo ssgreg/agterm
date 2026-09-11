@@ -6,6 +6,7 @@ paths:
   - "agterm/Views/Palette.swift"
   - "agterm/Views/PaneShortcuts.swift"
   - "agterm/Views/SessionSwitcher.swift"
+  - "agtermCore/Sources/agtermCore/AppStore+CloseReselection.swift"
   - "agtermCore/Sources/agtermCore/PaletteCatalog.swift"
   - "agtermCore/Sources/agtermCore/RecencyStack.swift"
   - "agtermCore/Sources/agtermCore/Fuzzy.swift"
@@ -170,15 +171,25 @@ paths:
   no-op. The divert is gated on `close_session` still holding ⌘W, the same condition
   `applyCloseSessionChord` splits on: rebound off it, the stock item takes the chord back and the
   auxiliary window closes itself, so the new chord keeps its labelled meaning.
-- All active-session close paths use host-free `closeReselectionTarget` (Discussion #147). Prefer the most
-  recent survivor in three widening scopes: same workspace intersected with `navigableSessions`, all
-  navigable sessions, then the whole tree. Build scopes from the post-removal tree; soft close retains
-  recency until grace finalization for undo.
-- This preserves the current workspace when possible, remains inside flagged/focused views while they
-  contain survivors, and lets `disableFocusIfSelectionOutsideSet` reveal a whole-tree fallback while
-  preserving membership.
-- If MRU is empty, narrowed modes use `nearestInScopeTarget` over flattened sidebar order; unfiltered tree
-  uses the sole `reselectionTarget` caller. Do not choose the first flagged row because it destroys locality.
+- All active-session close paths use host-free `closeReselectionTarget` (Discussion #147). Ask recency per
+  level, narrowest first: same workspace intersected with `navigableSessions`, then `navigableSessions`,
+  then the whole tree ONLY while nothing is navigable. Build every level from the post-removal tree; soft
+  close retains recency until grace finalization for undo, and only the tree-derived sets keep the closing
+  session out of the pick.
+- This keeps the current workspace while it holds a REMEMBERED survivor, and stays inside flagged/focused
+  views while they hold one. A workspace whose survivors were never visited MAY yield, and only when
+  `navigableSessions` holds a remembered session elsewhere: under a single-workspace focus the two levels
+  are the same set, so the walk still takes it even with a remembered session outside the filter.
+  `session new --no-select` leaves tabs unremembered until first visit, so a script-filled workspace is
+  normally in that state.
+- The whole-tree level stays gated on an empty navigable set, because outside it a pick strands the
+  selection off the navigation set in `.flagged` (`disableFocusIfSelectionOutsideSet` returns early there)
+  and drops the user's focus filter in `.tree` (that same net fires and reveals the pick).
+- If no level remembers anyone, narrowed modes use `nearestInScopeTarget` over flattened sidebar order;
+  unfiltered tree uses the sole `reselectionTarget` caller. Do not choose the first flagged row because it
+  destroys locality.
+- The selection moves `currentWorkspaceID` with it (`selectedSessionID.didSet` clears `freshWorkspaceID`),
+  so a cross-workspace pick retargets workspace-scoped `--target active` (`session new`, `workspace focus`).
   Closing the last flagged session widens to the whole tree rather than leaving no terminal.
 - Workspace removal uses `workspaceRemovalTarget`: most recent visible, then first visible, then positional.
   Preserve `softCloseSessions.removedBeforeActive` for fallback index adjustment. The named

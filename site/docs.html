@@ -1144,12 +1144,13 @@
               Dashboard, recent sessions, and sessions needing attention for the last-active window; those lists and actions stay
               scoped to that window even if another window comes forward while the menu is open, apart from New Window, which
               belongs to no existing window and stays available whatever the last-active one is doing. That same recently-used history decides where you land when you close
-              the session you are in — agterm returns you to the session you were most recently working in, not to whichever row
-              happens to sit next to the one that closed. The pick stays inside the closing session's workspace, and in the flagged
-              view stays within the flagged set, while in the tree with the workspace filter applied it stays within the marked
-              workspaces. It widens
-              beyond the workspace only when the close leaves nothing there to return to, and beyond what is on screen only when
-              that too is exhausted. If no recent session qualifies at all, it falls back to the adjacent row, kept inside the
+              the session you are in — agterm returns you to a session you were recently working in, not to whichever row
+              happens to sit next to the one that closed. The pick prefers a session inside the closing session's workspace that you have
+              actually worked in, and in the flagged view stays within the flagged set, while in the tree with the workspace filter
+              applied it stays within the marked workspaces. It can leave the workspace when nothing there is a session you have
+              visited, even if sessions remain there - but only for one you have visited within those same bounds, so a
+              filter narrowed to a single workspace keeps you inside it either way. It looks outside those bounds only
+              when they hold no session at all. If no recent session qualifies at all, it falls back to the adjacent row, kept inside the
               narrowed view while one is applied, and to the first session of another workspace when the closed session was the
               last one in its own.
             </p>

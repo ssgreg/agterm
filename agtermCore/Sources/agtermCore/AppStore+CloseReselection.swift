@@ -3,28 +3,30 @@ import Foundation
 extension AppStore {
     /// Picks the next selection after CLOSING the active session at `location`: the most-recently-active
     /// surviving session, else a positional walk.
-    /// The MRU scope narrows to the closing session's own workspace ∩ the VISIBLE set (`navigableSessions`,
-    /// so both the flagged list and the focus filter apply) — an unscoped survivor could yank the user into
-    /// another workspace, and a pick the sidebar isn't rendering would strand the selection. Exhausting a
-    /// scope widens through three levels: that workspace's visible sessions, everything visible, the whole
-    /// tree. Only a widened scope with no recency falls to a positional walk, and while any narrowing is
-    /// applied that is the flattened in-scope walk over the widened scope, not `reselectionTarget` —
-    /// `narrowed` keys on the MODE, so it stays true after the widening.
-    /// A pick outside the marked set meets each caller's `disableFocusIfSelectionOutsideSet`. The scope is
-    /// built from the TREE, so a session already removed cannot come back even while it survives in
-    /// `sessionRecency` (the soft-close paths keep it there for undo).
+    /// Recency is asked per level, narrowest first - the closing session's workspace ∩ the VISIBLE set
+    /// (`navigableSessions`, so flagged and focus both apply), then that visible set - so a REMEMBERED
+    /// local survivor wins, and a workspace that remembers nobody yields only when the visible set holds a
+    /// remembered session elsewhere - under a single-workspace narrowing the two levels coincide, so the
+    /// walk still takes it. The whole tree is asked only while nothing is visible, because outside the visible set a
+    /// pick has no good end in either mode: in `.flagged` it sits off the navigation set with
+    /// `disableFocusIfSelectionOutsideSet` returning early, and in `.tree` that same net drops the user's
+    /// focus filter to reveal it.
+    /// Remembering nobody anywhere falls to the positional walk - in-scope over `walkScope` while a
+    /// narrowing applies (`narrowed` keys on the MODE, so it holds however wide `walkScope` ends up), else
+    /// `reselectionTarget`. Every set here is built from the TREE, so a session already removed cannot come
+    /// back while it survives in `sessionRecency` for undo.
     func closeReselectionTarget(after location: (workspaceIndex: Int, sessionIndex: Int)) -> UUID? {
         let visible = Set(navigableSessions.map(\.id))
         let everything = Set(workspaces.flatMap(\.sessions).map(\.id))
         let inWorkspace = Set(workspaces[location.workspaceIndex].sessions.map(\.id))
         let sameWorkspace = inWorkspace.intersection(visible)
-        // the whole-tree level is what makes "widen when exhausted" mean widen: without it an emptied
-        // visible scope falls to a positional jump into the first workspace.
-        let scope = sameWorkspace.isEmpty ? (visible.isEmpty ? everything : visible) : sameWorkspace
-        if let recent = sessionRecency.top(1, in: scope).first { return recent }
-        // reachable with no recency at all, e.g. the first close after a restore.
+        if let recent = sessionRecency.top(1, in: sameWorkspace).first { return recent }
+        if let recent = sessionRecency.top(1, in: visible).first { return recent }
+        if visible.isEmpty, let recent = sessionRecency.top(1, in: everything).first { return recent }
+        // reachable with recency that names nothing at any level, e.g. the first close after a restore.
         let narrowed = sidebarMode == .flagged || focusEnabled
-        if narrowed, let inScope = nearestInScopeTarget(after: location, scope: scope) {
+        let walkScope = sameWorkspace.isEmpty ? (visible.isEmpty ? everything : visible) : sameWorkspace
+        if narrowed, let inScope = nearestInScopeTarget(after: location, scope: walkScope) {
             return inScope
         }
         return reselectionTarget(after: location)

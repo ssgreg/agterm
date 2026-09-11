@@ -415,7 +415,15 @@ buys nothing. A caller with no tree uses `version`.
   (single-selection only).
 - `session close [--target T ...] [--window W]` — close one session, or repeat `--target` to close
   several sessions in the same window/store. Batch close honors the GUI grace-undo setting: one grouped
-  undo/reopen record when enabled, immediate close when disabled. Returns `result.affected`.
+  undo/reopen record when enabled, immediate close when disabled. Returns `result.affected`. Closing the
+  SELECTED session moves the selection to the most recently used surviving session, preferring one in the
+  closing session's workspace; when that workspace holds none the user has visited, the pick MAY leave it,
+  but only for a remembered session inside the same navigable set (so a single-workspace focus filter
+  keeps the pick local even with a remembered session outside it). Everything opened with `--no-select`
+  counts as unvisited until its first visit. The new selection is what
+  `tree` reports as `active`, and it carries `currentWorkspaceID` with it, so workspace-scoped
+  `--target active` (`session new`, `workspace focus`, `workspace rename`) follows it too — read `tree`
+  back after a close rather than assuming the workspace stayed.
 - `session select [--target] [--window W]`.
 - `session rename <name> [--target] [--window W]`.
 - `session reveal [--target] [--window W]` — select the target session's focused-pane working
